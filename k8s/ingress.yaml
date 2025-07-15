@@ -1,0 +1,24 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: todo-app-ingress
+  annotations:
+    # Specify that we want an AWS Application Load Balancer
+    kubernetes.io/ingress.class: alb
+    # Scheme defines if the LB is internal or internet-facing
+    alb.ingress.kubernetes.io/scheme: internet-facing
+    # The health check path for the target group
+    alb.ingress.kubernetes.io/healthcheck-path: /
+    # The port the target group will forward traffic to
+    alb.ingress.kubernetes.io/target-type: ip
+spec:
+  rules:
+  - http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: todo-app-service
+            port:
+              number: 80
