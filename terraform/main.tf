@@ -16,12 +16,27 @@ data "aws_ami" "ubuntu" {
   owners = ["099720109477"] # Canonical's AWS account ID
 }
 
+# Get the OIDC provider URL for the EKS cluster to use with IAM Roles for Service Accounts (IRSA)
+data "tls_certificate" "eks" {
+  url = aws_eks_cluster.main.identity[0].oidc[0].issuer
+}
+
+# Use the http data source to download the policy from a URL
+data "http" "iam_policy" {
+  url = "https://raw.githubusercontent.com/kubernetes-sigs/aws-load-balancer-controller/v2.5.4/docs/install/iam_policy.json"
+}
+
 # ------------------------------------------------------------------------------
 # NETWORKING (Multi-AZ)
 # ------------------------------------------------------------------------------
 
 resource "aws_vpc" "main" {
   cidr_block = var.vpc_cidr
+
+  # Enable DNS support and hostnames for the VPC, required for VPC endpoints
+  enable_dns_support   = true
+  enable_dns_hostnames = true
+
   tags = {
     Name = "${var.project_name}-vpc"
   }
@@ -34,7 +49,9 @@ resource "aws_subnet" "public_az1" {
   map_public_ip_on_launch = true
   availability_zone       = "${var.aws_region}a"
   tags = {
-    Name = "${var.project_name}-public-subnet-az1"
+    Name                                = "${var.project_name}-public-subnet-az1"
+    "kubernetes.io/cluster/${var.project_name}-cluster" = "shared"
+    "kubernetes.io/role/elb"            = "1"
   }
 }
 
@@ -44,6 +61,7 @@ resource "aws_subnet" "private_az1" {
   availability_zone = "${var.aws_region}a"
   tags = {
     Name                              = "${var.project_name}-private-subnet-az1"
+    "kubernetes.io/cluster/${var.project_name}-cluster" = "shared"
     "kubernetes.io/role/internal-elb" = "1"
   }
 }
@@ -55,7 +73,9 @@ resource "aws_subnet" "public_az2" {
   map_public_ip_on_launch = true
   availability_zone       = "${var.aws_region}b"
   tags = {
-    Name = "${var.project_name}-public-subnet-az2"
+    Name                                = "${var.project_name}-public-subnet-az2"
+    "kubernetes.io/cluster/${var.project_name}-cluster" = "shared"
+    "kubernetes.io/role/elb"            = "1"
   }
 }
 
@@ -65,6 +85,7 @@ resource "aws_subnet" "private_az2" {
   availability_zone = "${var.aws_region}b"
   tags = {
     Name                              = "${var.project_name}-private-subnet-az2"
+    "kubernetes.io/cluster/${var.project_name}-cluster" = "shared"
     "kubernetes.io/role/internal-elb" = "1"
   }
 }
@@ -135,6 +156,122 @@ resource "aws_route_table_association" "private_az2" {
 }
 
 # ------------------------------------------------------------------------------
+# NETWORK ACL (FIX for ImagePullBackOff)
+# ------------------------------------------------------------------------------
+resource "aws_network_acl" "main" {
+  vpc_id = aws_vpc.main.id
+
+  egress {
+    protocol   = "-1"
+    rule_no    = 100
+    action     = "allow"
+    cidr_block = "0.0.0.0/0"
+    from_port  = 0
+    to_port    = 0
+  }
+
+  ingress {
+    protocol   = "-1"
+    rule_no    = 100
+    action     = "allow"
+    cidr_block = "0.0.0.0/0"
+    from_port  = 0
+    to_port    = 0
+  }
+
+  subnet_ids = [
+    aws_subnet.public_az1.id,
+    aws_subnet.private_az1.id,
+    aws_subnet.public_az2.id,
+    aws_subnet.private_az2.id,
+  ]
+
+  tags = {
+    Name = "${var.project_name}-nacl"
+  }
+}
+
+# ------------------------------------------------------------------------------
+# VPC ENDPOINTS (FIX for ImagePullBackOff)
+# ------------------------------------------------------------------------------
+
+resource "aws_security_group" "vpc_endpoint_sg" {
+  name   = "${var.project_name}-vpc-endpoint-sg"
+  vpc_id = aws_vpc.main.id
+
+  ingress {
+    description = "Allow EKS nodes to access endpoints"
+    from_port   = 443
+    to_port     = 443
+    protocol    = "tcp"
+    security_groups = [aws_eks_cluster.main.vpc_config[0].cluster_security_group_id]
+  }
+
+  tags = {
+    Name = "${var.project_name}-vpc-endpoint-sg"
+  }
+}
+
+resource "aws_vpc_endpoint" "ecr_api" {
+  vpc_id              = aws_vpc.main.id
+  service_name        = "com.amazonaws.${var.aws_region}.ecr.api"
+  vpc_endpoint_type   = "Interface"
+  subnet_ids          = [aws_subnet.private_az1.id, aws_subnet.private_az2.id]
+  security_group_ids  = [aws_security_group.vpc_endpoint_sg.id]
+  private_dns_enabled = true
+
+  policy = jsonencode({
+    Version = "2012-10-17",
+    Statement = [
+      {
+        Effect    = "Allow",
+        Principal = "*",
+        Action    = "*",
+        Resource  = "*"
+      }
+    ]
+  })
+}
+
+resource "aws_vpc_endpoint" "ecr_dkr" {
+  vpc_id              = aws_vpc.main.id
+  service_name        = "com.amazonaws.${var.aws_region}.ecr.dkr"
+  vpc_endpoint_type   = "Interface"
+  subnet_ids          = [aws_subnet.private_az1.id, aws_subnet.private_az2.id]
+  security_group_ids  = [aws_security_group.vpc_endpoint_sg.id]
+  private_dns_enabled = true
+
+  policy = jsonencode({
+    Version = "2012-10-17",
+    Statement = [
+      {
+        Effect    = "Allow",
+        Principal = "*",
+        Action    = "*",
+        Resource  = "*"
+      }
+    ]
+  })
+}
+
+resource "aws_vpc_endpoint" "s3" {
+  vpc_id            = aws_vpc.main.id
+  service_name      = "com.amazonaws.${var.aws_region}.s3"
+  vpc_endpoint_type = "Gateway"
+  route_table_ids   = [aws_route_table.private.id]
+}
+
+# Add a VPC endpoint for STS (Security Token Service)
+resource "aws_vpc_endpoint" "sts" {
+  vpc_id              = aws_vpc.main.id
+  service_name        = "com.amazonaws.${var.aws_region}.sts"
+  vpc_endpoint_type   = "Interface"
+  subnet_ids          = [aws_subnet.private_az1.id, aws_subnet.private_az2.id]
+  security_group_ids  = [aws_security_group.vpc_endpoint_sg.id]
+  private_dns_enabled = true
+}
+
+# ------------------------------------------------------------------------------
 # SECURITY GROUPS
 # ------------------------------------------------------------------------------
 
@@ -151,12 +288,14 @@ resource "aws_security_group" "mongodb_sg" {
     cidr_blocks = ["0.0.0.0/0"] # WEAKNESS
   }
 
+  # FIX: Allow traffic from the private subnets where the EKS nodes live.
+  # This is more robust than relying on the cluster security group.
   ingress {
-    description     = "MongoDB from EKS Nodes"
-    from_port       = 27017
-    to_port         = 27017
-    protocol        = "tcp"
-    security_groups = [aws_eks_cluster.main.vpc_config[0].cluster_security_group_id]
+    description = "MongoDB from EKS Nodes"
+    from_port   = 27017
+    to_port     = 27017
+    protocol    = "tcp"
+    cidr_blocks = [var.private_subnet_az1_cidr, var.private_subnet_az2_cidr]
   }
 
   egress {
@@ -170,6 +309,19 @@ resource "aws_security_group" "mongodb_sg" {
     Name = "${var.project_name}-mongodb-sg"
   }
 }
+
+# FIX: Add a rule to the EKS cluster security group to allow inbound traffic
+# from the ALB. This allows the health checks to pass.
+resource "aws_security_group_rule" "alb_to_nodes" {
+  type                     = "ingress"
+  from_port                = 0
+  to_port                  = 0
+  protocol                 = "-1"
+  security_group_id        = aws_eks_cluster.main.vpc_config[0].cluster_security_group_id
+  # Allow traffic from anywhere within the VPC
+  cidr_blocks              = [var.vpc_cidr]
+}
+
 
 # ------------------------------------------------------------------------------
 # IAM ROLES & POLICIES
@@ -337,13 +489,14 @@ resource "aws_eks_cluster" "main" {
     endpoint_private_access = true
   }
 
-  # FIX: Add an explicit dependency on the S3 bucket policy.
-  # This forces Terraform to fully create the S3 bucket and its configuration
-  # before starting the lengthy EKS cluster creation process.
   depends_on = [
     aws_iam_role_policy_attachment.eks_cluster_policy,
     aws_s3_bucket_policy.db_backups_policy,
   ]
+}
+
+resource "random_pet" "node_group_version" {
+  length = 2
 }
 
 resource "aws_eks_node_group" "main" {
@@ -360,6 +513,12 @@ resource "aws_eks_node_group" "main" {
 
   instance_types = ["t3.medium"]
 
+  # Add a changing tag to force replacement of the node group.
+  # This ensures the nodes get the latest networking configuration.
+  tags = {
+    "Name" = "${var.project_name}-node-group-${random_pet.node_group_version.id}"
+  }
+
   depends_on = [
     aws_iam_role_policy_attachment.eks_worker_node_policy,
     aws_iam_role_policy_attachment.eks_cni_policy,
@@ -374,7 +533,88 @@ resource "aws_eks_node_group" "main" {
 # ------------------------------------------------------------------------------
 
 resource "aws_ecr_repository" "app" {
-  name = "${var.project_name}/app"
+  name                 = "${var.project_name}/app"
+  force_delete         = true
+}
+
+# ------------------------------------------------------------------------------
+# AWS LOAD BALANCER CONTROLLER (FIX for Ingress)
+# ------------------------------------------------------------------------------
+
+# Create an OIDC provider for the EKS cluster
+resource "aws_iam_openid_connect_provider" "eks" {
+  client_id_list  = ["sts.amazonaws.com"]
+  thumbprint_list = [data.tls_certificate.eks.certificates[0].sha1_fingerprint]
+  url             = aws_eks_cluster.main.identity[0].oidc[0].issuer
+}
+
+# IAM policy for the AWS Load Balancer Controller
+resource "aws_iam_policy" "alb_controller_policy" {
+  name        = "${var.project_name}-alb-controller-policy"
+  description = "IAM policy for the AWS Load Balancer Controller"
+  policy      = data.http.iam_policy.response_body
+}
+
+# IAM role for the AWS Load Balancer Controller Service Account
+resource "aws_iam_role" "alb_controller_role" {
+  name = "${var.project_name}-alb-controller-role"
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17",
+    Statement = [
+      {
+        Effect = "Allow",
+        Principal = {
+          Federated = aws_iam_openid_connect_provider.eks.arn
+        },
+        Action = "sts:AssumeRoleWithWebIdentity",
+        Condition = {
+          StringEquals = {
+            "${replace(aws_iam_openid_connect_provider.eks.url, "https://", "")}:sub" = "system:serviceaccount:kube-system:aws-load-balancer-controller"
+          }
+        }
+      }
+    ]
+  })
+}
+
+resource "aws_iam_role_policy_attachment" "alb_controller_attach" {
+  policy_arn = aws_iam_policy.alb_controller_policy.arn
+  role       = aws_iam_role.alb_controller_role.name
+}
+
+# Install the AWS Load Balancer Controller using the Helm provider
+resource "helm_release" "aws_load_balancer_controller" {
+  name       = "aws-load-balancer-controller"
+  repository = "https://aws.github.io/eks-charts"
+  chart      = "aws-load-balancer-controller"
+  namespace  = "kube-system"
+  version    = "1.5.5"
+
+  set {
+    name  = "clusterName"
+    value = aws_eks_cluster.main.id
+  }
+
+  set {
+    name  = "serviceAccount.create"
+    value = "true"
+  }
+
+  set {
+    name  = "serviceAccount.name"
+    value = "aws-load-balancer-controller"
+  }
+
+  set {
+    name  = "serviceAccount.annotations.eks\\.amazonaws\\.com/role-arn"
+    value = aws_iam_role.alb_controller_role.arn
+  }
+
+  # FIX: Add the VPC ID to the controller's configuration
+  set {
+    name  = "vpcId"
+    value = aws_vpc.main.id
+  }
 }
 
 # ------------------------------------------------------------------------------
