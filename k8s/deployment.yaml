@@ -19,7 +19,7 @@ spec:
       containers:
       - name: todo-app
         # IMPORTANT: This image URL will be updated by our CI/CD pipeline
-        image: 992382748784.dkr.ecr.us-east-1.amazonaws.com/wiz-exercise/app:latest
+        image: 869935062949.dkr.ecr.us-east-1.amazonaws.com/wiz-exercise/app:latest
         ports:
         - containerPort: 3000
         env:
