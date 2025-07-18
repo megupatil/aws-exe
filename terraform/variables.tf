@@ -40,8 +40,10 @@ variable "private_subnet_az2_cidr" {
   default     = "10.0.4.0/24"
 }
 
+# ----------------- THIS IS THE HIGHLIGHTED CHANGE -----------------
 variable "db_instance_type" {
   description = "EC2 instance type for the MongoDB server."
   type        = string
-  default     = "t2.micro"
+  default     = "t3.medium"
 }
+# ------------------------------------------------------------------
