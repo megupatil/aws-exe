@@ -275,6 +275,7 @@ resource "aws_vpc_endpoint" "sts" {
 # SECURITY GROUPS
 # ------------------------------------------------------------------------------
 
+# ----------------- THIS IS THE HIGHLIGHTED CHANGE -----------------
 resource "aws_security_group" "mongodb_sg" {
   name        = "${var.project_name}-mongodb-sg"
   description = "Allow SSH and MongoDB traffic"
@@ -309,6 +310,7 @@ resource "aws_security_group" "mongodb_sg" {
     Name = "${var.project_name}-mongodb-sg"
   }
 }
+# ------------------------------------------------------------------
 
 # FIX: Add a rule to the EKS cluster security group to allow inbound traffic
 # from the ALB. This allows the health checks to pass.
@@ -412,10 +414,7 @@ resource "aws_instance" "mongodb_server" {
   subnet_id              = aws_subnet.public_az1.id
   vpc_security_group_ids = [aws_security_group.mongodb_sg.id]
   iam_instance_profile   = aws_iam_instance_profile.mongodb_vm_profile.name
-  user_data = templatefile("${path.module}/mongodb-setup.sh", {
-    db_user     = "wizadmin"
-    db_password = "verysecretpassword123"
-  })
+  user_data = templatefile("${path.module}/mongodb-setup.sh", {})
   key_name = aws_key_pair.deployer.key_name
 
   tags = {
