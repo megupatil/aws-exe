@@ -2,6 +2,7 @@ const express = require('express');
 const bodyParser = require('body-parser');
 const mongoose = require('mongoose');
 const fs = require('fs');
+const path = require('path'); // Import the path module
 
 const app = express();
 app.use(bodyParser.urlencoded({ extended: true }));
@@ -28,7 +29,9 @@ app.get('/', (req, res) => {
             // Read the wizexercise.txt file to display its content
             let fileContent = "File not found or could not be read.";
             try {
-                fileContent = fs.readFileSync('/app/wizexercise.txt', 'utf8');
+                // FIX: Use path.join to create a robust file path
+                const filePath = path.join(__dirname, 'wizexercise.txt');
+                fileContent = fs.readFileSync(filePath, 'utf8');
             } catch (e) {
                 console.log("Error reading wizexercise.txt:", e);
             }
