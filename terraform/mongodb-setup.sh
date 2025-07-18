@@ -1,6 +1,6 @@
 #!/bin/bash
 sudo apt-get update
-sudo apt-get install -y gnupg
+sudo apt-get install -y gnupg awscli
 
 # Import the public key for MongoDB 4.2 (an outdated version)
 wget -qO - https://www.mongodb.org/static/pgp/server-4.2.asc | sudo apt-key add -
@@ -32,9 +32,14 @@ sudo systemctl restart mongod
 # Wait for MongoDB to be ready
 sleep 10
 
-# Create an admin user for the application
-mongo --eval 'db.getSiblingDB("admin").createUser({user: "${db_user}", pwd: "${db_password}", roles: [{role: "readWriteAnyDatabase", db: "admin"}]})'
+# ----------------- THIS IS THE HIGHLIGHTED CHANGE -----------------
+# Create an admin user for the application with backup privileges
+mongo --eval 'db.getSiblingDB("admin").createUser({user: "wizadmin", pwd: "verysecretpassword123", roles: [{role: "readWriteAnyDatabase", db: "admin"}, {role: "backup", db: "admin"}]})'
+# ------------------------------------------------------------------
 
-# Enable authentication in the config file
-sudo sed -i '/security/a \ \ authorization: enabled' /etc/mongod.conf
+# FIX: Use a more robust method to enable authentication
+# This appends the security settings to the config file, avoiding sed issues.
+echo -e "\nsecurity:\n  authorization: enabled" | sudo tee -a /etc/mongod.conf
+
+# Restart mongod to apply the security changes
 sudo systemctl restart mongod
