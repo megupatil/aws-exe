@@ -88,20 +88,22 @@ jobs:
           oidc-provider-name: exc
           oidc-audience: meg-exc
       
-      - name: NPM Curation Audit
+      - name: NPM Configuration
+        run: |
+          jf npmc --repo-resolve=${{ github.event.inputs.rt_npm_remote_repo_id }} --repo-deploy=${{ github.event.inputs.rt_npm_remote_repo_id }}
+          jf curation-audit
+          rm -rf package-lock.json
+      
+      - name: NPM Install and Audit
         run: |
           if [ "${{ github.event.inputs.curation_audit }}" == 'true' ]; then
-            jf npmc --repo-resolve=${{ github.event.inputs.rt_npm_curation_remote_repo_id }}
+            jf npmc --repo-resolve=${{ github.event.inputs.rt_npm_curation_remote_repo_id }} --repo-deploy=${{ github.event.inputs.rt_npm_curation_remote_repo_id }}
             jf curation-audit
             rm -rf package-lock.json
           else
             echo "Skip Curation Audit!!!"
           fi
-      
-      - name: NPM Install and Audit
-        run: |
-          jf npmc --repo-resolve=${{ github.event.inputs.rt_npm_remote_repo_id }}
-          jf npm i --omit dev
+          jf npm install --omit dev
           if [ "${{ github.event.inputs.xr_enable_scan }}" == 'true' ]; then
             echo "Execute Xray scanning ..."
             jf audit --npm --fail=${{ github.event.inputs.xr_override_fail_build }}
@@ -140,7 +142,7 @@ jobs:
           jf rt build-collect-env
           jf rt build-add-git
           jf rt build-publish
-      
+          
       - name: Build Scan
         run: |
           jf build-scan --fail=${{ github.event.inputs.xr_override_fail_build }} --vuln
