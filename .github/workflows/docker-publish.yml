@@ -63,7 +63,6 @@ jobs:
       JFROG_CLI_LOG_LEVEL: ${{ github.event.inputs.cli_log_level }}
       JF_URL: https://megsec.jfrog.io
 
-    # Here we install all the tools: docker buildx, Node.js, JFrog CLI
     steps:
       - name: Print Inputs
         run: echo "${{ toJSON(github.event.inputs) }}"
@@ -87,10 +86,9 @@ jobs:
         with:
           oidc-provider-name: exc
           oidc-audience: meg-exc
-      
+
       - name: NPM Configuration
-        run: |
-          jf npmc --repo-resolve=${{ github.event.inputs.rt_npm_remote_repo_id }} --repo-deploy=${{ github.event.inputs.rt_npm_remote_repo_id }}
+        run: jf npmc --repo-resolve=${{ github.event.inputs.rt_npm_remote_repo_id }} --repo-deploy=${{ github.event.inputs.rt_npm_remote_repo_id }}
       
       - name: NPM Install and Audit
         run: |
