@@ -14,7 +14,7 @@ on:
       rt_npm_curation_remote_repo_id:
         required: true
         type: string
-        default: "megexc-npm-remote"
+        default: "megexc-npm-local"
         description: "NPM Curation Repository Name"
       rt_docker_repo:
         required: true
@@ -87,9 +87,9 @@ jobs:
           oidc-provider-name: exc
           oidc-audience: meg-exc
 
-      - name: NPM Configuration
+      - name: Configure NPM with JFrog
         run: jf npmc --repo-resolve=${{ github.event.inputs.rt_npm_remote_repo_id }} --repo-deploy=${{ github.event.inputs.rt_npm_remote_repo_id }}
-      
+
       - name: NPM Install and Audit
         run: |
           if [ "${{ github.event.inputs.curation_audit }}" == 'true' ]; then
@@ -122,7 +122,7 @@ jobs:
           tags: ${{ env.JF_URL }}/${{ env.DOCKER_REPO }}/${{ env.IMAGE_NAME }}:${{ github.run_number }}
           provenance: false
 
-      - name: Docker Add Package to Build
+      - name: Add Package Info to Build
         run: |
           echo "${{ env.JF_URL }}/${{ env.DOCKER_REPO }}/${{ env.IMAGE_NAME }}:${{ github.run_number }}@${{ steps.build.outputs.digest }}" > metadata.json
           jf rt build-docker-create ${{ env.DOCKER_REPO }} --image-file metadata.json
@@ -138,7 +138,7 @@ jobs:
           jf rt build-collect-env
           jf rt build-add-git
           jf rt build-publish
-          
+      
       - name: Build Scan
         run: |
           jf build-scan --fail=${{ github.event.inputs.xr_override_fail_build }} --vuln
