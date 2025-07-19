@@ -91,8 +91,6 @@ jobs:
       - name: NPM Configuration
         run: |
           jf npmc --repo-resolve=${{ github.event.inputs.rt_npm_remote_repo_id }} --repo-deploy=${{ github.event.inputs.rt_npm_remote_repo_id }}
-          jf curation-audit
-          rm -rf package-lock.json
       
       - name: NPM Install and Audit
         run: |
