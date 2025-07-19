@@ -1,58 +1,146 @@
-name: Docker Publish
+name: "aws-exe-docker-build"
 
 on:
   push:
     branches:
       - main
   workflow_dispatch:
+    inputs:
+      rt_npm_remote_repo_id:
+        required: true
+        type: string
+        default: "megexc-npm-local"
+        description: "Artifactory Repository Name"
+      rt_npm_curation_remote_repo_id:
+        required: true
+        type: string
+        default: "megexc-npm-local"
+        description: "NPM Curation Repository Name"
+      rt_docker_repo:
+        required: true
+        type: string
+        default: "megexc-docker-local"
+        description: "Artifactory Docker repository"
+      docker_image_name:
+        required: true
+        type: string
+        default: "aws-exe-image"
+        description: "Docker Image name"
+      xr_enable_scan:
+        required: true
+        type: string
+        default: "false"
+        description: "Scan with Xray"
+      curation_audit:
+        required: true
+        type: string
+        default: "false"
+        description: "Audit with Curation"
+      xr_override_fail_build:
+        required: true
+        type: string
+        default: "false"
+        description: "Set to false to ignore the fail build coming from Xray (exit code 3)"
+      cli_log_level:
+        required: true
+        type: string
+        default: "INFO"
+        description: "Set JFrog CLI Log level"
+
+permissions:
+  actions: read           # for detecting the GitHub Actions environment
+  id-token: write         # for creating OIDC tokens for signing
+  packages: write         # for uploading attestations
+  contents: read          # read the contents permission
+  security-events: write  # for uploading code scanning
 
 jobs:
   build:
     runs-on: ubuntu-latest
+    env:
+      DOCKER_REPO: ${{ github.event.inputs.rt_docker_repo }}
+      IMAGE_NAME: ${{ github.event.inputs.docker_image_name }}
+      JFROG_CLI_LOG_LEVEL: ${{ github.event.inputs.cli_log_level }}
+      JF_URL: https://megsec.jfrog.io
 
+    # Here we install all the tools : docker buildx, Node.js, JFrog CLI
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v2
+      - name: Print Inputs
+        run: echo "${{ toJSON(github.event.inputs) }}"
+
+      - name: Checkout
+        uses: actions/checkout@v4
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v2
+        uses: docker/setup-buildx-action@v3
 
-      - name: Cache Docker layers
-        uses: actions/cache@v2
+      - name: Install Node
+        uses: actions/setup-node@v4
         with:
-          path: /tmp/.buildx-cache
-          key: ${{ runner.os }}-buildx-${{ github.sha }}
-          restore-keys: |
-            ${{ runner.os }}-buildx
-
-      - name: Log in to DockerHub
-        uses: docker/login-action@v2
-        with:
-          username: ${{ secrets.DOCKER_USERNAME }}
-          password: ${{ secrets.DOCKER_PASSWORD }}
-
-      - name: Build and tag Docker image
-        run: |
-          docker buildx build --platform linux/amd64 -t my-docker-image:latest .
+          node-version: 18
       
-      - name: Set up JFrog CLI with OIDC integration
+      - name: Setup JFrog CLI
         uses: jfrog/setup-jfrog-cli@v4
+        id: setup-cli
         env:
-          JF_URL: https://megsec.jfrog.io
+          JF_PROJECT: ${{ vars.JF_PROJECT }}
         with:
           oidc-provider-name: exc
           oidc-audience: meg-exc
-
-      - name: Configure JFrog CLI
+      
+      - name: NPM Curation Audit
         run: |
-          jfrog rt config --artifactory-url $JF_URL \
-                          --auth-type bearer \
-                          myserver
-
-      - name: Publish Docker image to JFrog Artifactory
+          if [ ${{ github.event.inputs.curation_audit }} == 'true' ]; then
+            jf npmc --repo-resolve ${{ github.event.inputs.rt_npm_curation_remote_repo_id }}
+            jf curation-audit
+            rm -rf package-lock.json
+          else
+            echo "Skip Curation Audit!!!"
+          fi
+      
+      - name: NPM Install and Audit
         run: |
-          docker save my-docker-image:latest | jfrog rt u --build-name=my-build --build-number=1 - myserver/docker-repo/my-docker-image:latest.tar
+          jf npmc --repo-resolve ${{ github.event.inputs.rt_npm_remote_repo_id }}
+          jf npm i --omit dev
+          if [ ${{ github.event.inputs.xr_enable_scan }} == 'true' ]; then
+            echo "Execute Xray scanning ..."
+            jf audit --npm --fail=${{ github.event.inputs.xr_override_fail_build }}
+          else
+            echo "Skip Xray scanning!!!"
+          fi
+      
+      - name: Docker Authenticate
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.JF_URL }}
+          username: ${{ steps.setup-cli.outputs.oidc-user }}
+          password: ${{ steps.setup-cli.outputs.oidc-token }}
+      
+      - name: Docker Build and Push
+        uses: docker/build-push-action@v5
+        id: build
+        with:
+          push: true
+          tags: ${{ env.JF_URL }}/${{ env.DOCKER_REPO }}/${{ env.IMAGE_NAME }}:${{ github.run_number }}
+          provenance: false
 
+      - name: Docker Add Package to Build
+        run: |
+          echo "${{ env.JF_URL }}/${{ env.DOCKER_REPO }}/${{ env.IMAGE_NAME }}:${{ github.run_number }}@${{ steps.build.outputs.digest }}" > metadata.json
+          jf rt build-docker-create ${{ env.DOCKER_REPO }} --image-file metadata.json
+      
+      - name: Docker Scan
+        run: |
+          echo "digest=$(docker images --no-trunc --quiet ${{ env.JF_URL }}/${{ env.DOCKER_REPO }}/${{ env.IMAGE_NAME }})" >> $GITHUB_OUTPUT
+          jf docker pull ${{ env.JF_URL }}/${{ env.DOCKER_REPO }}/${{ env.IMAGE_NAME }}:${{ github.run_number }}
+          jf docker scan ${{ env.JF_URL }}/${{ env.DOCKER_REPO }}/${{ env.IMAGE_NAME }}:${{ github.run_number }} --fail=${{ github.event.inputs.xr_override_fail_build }} --vuln
+      
       - name: Publish Build Info
         run: |
-          jfrog rt bp my-build 1
+          jf rt build-collect-env
+          jf rt build-add-git
+          jf rt build-publish
+      
+      - name: Build Scan
+        run: |
+          jf build-scan --fail=${{ github.event.inputs.xr_override_fail_build }} --vuln
