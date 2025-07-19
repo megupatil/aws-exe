@@ -63,7 +63,7 @@ jobs:
       JFROG_CLI_LOG_LEVEL: ${{ github.event.inputs.cli_log_level }}
       JF_URL: https://megsec.jfrog.io
 
-    # Here we install all the tools : docker buildx, Node.js, JFrog CLI
+    # Here we install all the tools: docker buildx, Node.js, JFrog CLI
     steps:
       - name: Print Inputs
         run: echo "${{ toJSON(github.event.inputs) }}"
@@ -90,8 +90,8 @@ jobs:
       
       - name: NPM Curation Audit
         run: |
-          if [ ${{ github.event.inputs.curation_audit }} == 'true' ]; then
-            jf npmc --repo-resolve ${{ github.event.inputs.rt_npm_curation_remote_repo_id }}
+          if [ "${{ github.event.inputs.curation_audit }}" == 'true' ]; then
+            jf npmc --repo-resolve=${{ github.event.inputs.rt_npm_curation_remote_repo_id }}
             jf curation-audit
             rm -rf package-lock.json
           else
@@ -100,9 +100,9 @@ jobs:
       
       - name: NPM Install and Audit
         run: |
-          jf npmc --repo-resolve ${{ github.event.inputs.rt_npm_remote_repo_id }}
+          jf npmc --repo-resolve=${{ github.event.inputs.rt_npm_remote_repo_id }}
           jf npm i --omit dev
-          if [ ${{ github.event.inputs.xr_enable_scan }} == 'true' ]; then
+          if [ "${{ github.event.inputs.xr_enable_scan }}" == 'true' ]; then
             echo "Execute Xray scanning ..."
             jf audit --npm --fail=${{ github.event.inputs.xr_override_fail_build }}
           else
