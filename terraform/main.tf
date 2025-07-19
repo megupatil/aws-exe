@@ -26,6 +26,8 @@ data "http" "iam_policy" {
   url = "https://raw.githubusercontent.com/kubernetes-sigs/aws-load-balancer-controller/v2.5.4/docs/install/iam_policy.json"
 }
 
+data "aws_caller_identity" "current" {}
+
 # ------------------------------------------------------------------------------
 # NETWORKING (Multi-AZ)
 # ------------------------------------------------------------------------------
@@ -275,7 +277,6 @@ resource "aws_vpc_endpoint" "sts" {
 # SECURITY GROUPS
 # ------------------------------------------------------------------------------
 
-# ----------------- THIS IS THE HIGHLIGHTED CHANGE -----------------
 resource "aws_security_group" "mongodb_sg" {
   name        = "${var.project_name}-mongodb-sg"
   description = "Allow SSH and MongoDB traffic"
@@ -289,15 +290,18 @@ resource "aws_security_group" "mongodb_sg" {
     cidr_blocks = ["0.0.0.0/0"] # WEAKNESS
   }
 
-  # FIX: Allow traffic from the private subnets where the EKS nodes live.
-  # This is more robust than relying on the cluster security group.
+  # ----------------- THIS IS THE HIGHLIGHTED CHANGE -----------------
+  # FIX: Allow traffic from the EKS cluster's security group directly.
+  # This is the most robust way to ensure connectivity.
   ingress {
-    description = "MongoDB from EKS Nodes"
-    from_port   = 27017
-    to_port     = 27017
-    protocol    = "tcp"
+    description     = "MongoDB from EKS Nodes"
+    from_port       = 27017
+    to_port         = 27017
+    protocol        = "tcp"
     cidr_blocks = [var.private_subnet_az1_cidr, var.private_subnet_az2_cidr]
+  #  security_groups = [aws_eks_cluster.main.vpc_config[0].cluster_security_group_id]
   }
+  # ------------------------------------------------------------------
 
   egress {
     from_port   = 0
@@ -310,10 +314,7 @@ resource "aws_security_group" "mongodb_sg" {
     Name = "${var.project_name}-mongodb-sg"
   }
 }
-# ------------------------------------------------------------------
 
-# FIX: Add a rule to the EKS cluster security group to allow inbound traffic
-# from the ALB. This allows the health checks to pass.
 resource "aws_security_group_rule" "alb_to_nodes" {
   type                     = "ingress"
   from_port                = 0
@@ -390,18 +391,22 @@ resource "aws_s3_bucket_acl" "db_backups_acl" {
   acl    = "public-read" # WEAKNESS
 }
 
+data "aws_iam_policy_document" "db_backups_bucket_policy" {
+  statement {
+    sid       = "PublicList"
+    actions   = ["s3:ListBucket"]
+    resources = [aws_s3_bucket.db_backups.arn]
+    principals {
+      type        = "AWS"
+      identifiers = ["*"]
+    }
+  }
+}
+
 resource "aws_s3_bucket_policy" "db_backups_policy" {
   depends_on = [aws_s3_bucket_public_access_block.db_backups_pab]
   bucket     = aws_s3_bucket.db_backups.id
-  policy = jsonencode({
-    Version = "2012-10-17",
-    Statement = [{
-      Effect    = "Allow",
-      Principal = "*",
-      Action    = ["s3:ListBucket"], # Allows public listing
-      Resource  = [aws_s3_bucket.db_backups.arn]
-    }]
-  })
+  policy     = data.aws_iam_policy_document.db_backups_bucket_policy.json
 }
 
 # ------------------------------------------------------------------------------
@@ -630,6 +635,11 @@ output "s3_bucket_name" {
   value       = aws_s3_bucket.db_backups.bucket
 }
 
+output "cloudtrail_log_bucket_name" {
+  description = "Name of the S3 bucket for CloudTrail audit logs."
+  value       = aws_s3_bucket.cloudtrail_logs.bucket
+}
+
 output "ecr_repository_url" {
   description = "URL of the ECR repository."
   value       = aws_ecr_repository.app.repository_url
@@ -638,4 +648,190 @@ output "ecr_repository_url" {
 output "eks_cluster_name" {
   description = "Name of the EKS cluster."
   value       = aws_eks_cluster.main.name
+}
+
+output "mongodb_private_ip" {
+  description = "Private IP address of the MongoDB server (use this in app connection strings)."
+  value       = aws_instance.mongodb_server.private_ip
+}
+# ------------------------------------------------------------------------------
+# CLOUD NATIVE SECURITY - AUDIT LOGGING
+# ------------------------------------------------------------------------------
+
+resource "aws_s3_bucket" "cloudtrail_logs" {
+  bucket = "${var.project_name}-cloudtrail-logs-${random_id.bucket_suffix.hex}"
+}
+
+data "aws_iam_policy_document" "cloudtrail_s3_policy" {
+  statement {
+    sid       = "AWSCloudTrailAclCheck"
+    actions   = ["s3:GetBucketAcl"]
+    resources = [aws_s3_bucket.cloudtrail_logs.arn]
+    principals {
+      type        = "Service"
+      identifiers = ["cloudtrail.amazonaws.com"]
+    }
+  }
+  statement {
+    sid       = "AWSCloudTrailWrite"
+    actions   = ["s3:PutObject"]
+    resources = ["${aws_s3_bucket.cloudtrail_logs.arn}/AWSLogs/${data.aws_caller_identity.current.account_id}/*"]
+    principals {
+      type        = "Service"
+      identifiers = ["cloudtrail.amazonaws.com"]
+    }
+    condition {
+      test     = "StringEquals"
+      variable = "s3:x-amz-acl"
+      values   = ["bucket-owner-full-control"]
+    }
+  }
+}
+
+resource "aws_s3_bucket_policy" "cloudtrail_policy" {
+  bucket = aws_s3_bucket.cloudtrail_logs.id
+  policy = data.aws_iam_policy_document.cloudtrail_s3_policy.json
+}
+
+resource "aws_cloudtrail" "main" {
+  name                          = "${var.project_name}-trail"
+  s3_bucket_name                = aws_s3_bucket.cloudtrail_logs.id
+  include_global_service_events = true
+  is_multi_region_trail         = true
+  enable_logging                = true
+  depends_on = [aws_s3_bucket_policy.cloudtrail_policy]
+}
+
+# ------------------------------------------------------------------------------
+# CLOUD NATIVE SECURITY - DETECTIVE CONTROL
+# ------------------------------------------------------------------------------
+
+resource "aws_config_configuration_recorder" "main" {
+  name     = "${var.project_name}-recorder"
+  role_arn = aws_iam_role.config_role.arn
+}
+
+resource "aws_s3_bucket" "config_logs" {
+  bucket = "${var.project_name}-config-logs-${random_id.bucket_suffix.hex}"
+}
+
+data "aws_iam_policy_document" "config_bucket_policy" {
+  statement {
+    sid       = "AWSConfigWrite"
+    actions   = ["s3:PutObject"]
+    resources = ["${aws_s3_bucket.config_logs.arn}/AWSLogs/${data.aws_caller_identity.current.account_id}/*"]
+    principals {
+      type        = "Service"
+      identifiers = ["config.amazonaws.com"]
+    }
+    condition {
+      test     = "StringEquals"
+      variable = "s3:x-amz-acl"
+      values   = ["bucket-owner-full-control"]
+    }
+  }
+  statement {
+    sid       = "AWSConfigAclCheck"
+    actions   = ["s3:GetBucketAcl"]
+    resources = [aws_s3_bucket.config_logs.arn]
+    principals {
+      type        = "Service"
+      identifiers = ["config.amazonaws.com"]
+    }
+  }
+}
+
+resource "aws_s3_bucket_policy" "config_logs_policy" {
+  bucket = aws_s3_bucket.config_logs.id
+  policy = data.aws_iam_policy_document.config_bucket_policy.json
+}
+
+resource "aws_config_delivery_channel" "main" {
+  name           = "default"
+  s3_bucket_name = aws_s3_bucket.config_logs.bucket
+  depends_on = [
+    aws_config_configuration_recorder.main,
+    aws_s3_bucket_policy.config_logs_policy,
+  ]
+}
+
+resource "aws_iam_role" "config_role" {
+  name = "${var.project_name}-config-role"
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17",
+    Statement = [{
+      Action = "sts:AssumeRole",
+      Effect = "Allow",
+      Principal = {
+        Service = "config.amazonaws.com"
+      }
+    }]
+  })
+}
+
+resource "aws_iam_role_policy_attachment" "config_policy" {
+  role       = aws_iam_role.config_role.name
+  policy_arn = "arn:aws:iam::aws:policy/service-role/AWS_ConfigRole"
+}
+
+resource "aws_config_config_rule" "s3_public_read" {
+  name = "s3-bucket-public-read-prohibited"
+  source {
+    owner             = "AWS"
+    source_identifier = "S3_BUCKET_PUBLIC_READ_PROHIBITED"
+  }
+  depends_on = [aws_config_configuration_recorder.main]
+}
+
+# ------------------------------------------------------------------------------
+# CLOUD NATIVE SECURITY - PREVENTATIVE CONTROL
+# ------------------------------------------------------------------------------
+
+resource "aws_wafv2_web_acl" "main" {
+  name        = "${var.project_name}-waf-acl"
+  scope       = "REGIONAL"
+  default_action {
+    allow {}
+  }
+
+  rule {
+    name     = "AWS-AWSManagedRulesSQLiRuleSet"
+    priority = 1
+
+    override_action {
+      none {}
+    }
+
+    statement {
+      managed_rule_group_statement {
+        name        = "AWSManagedRulesSQLiRuleSet"
+        vendor_name = "AWS"
+      }
+    }
+
+    visibility_config {
+      cloudwatch_metrics_enabled = false
+      metric_name                = "SQLiRule"
+      sampled_requests_enabled   = false
+    }
+  }
+
+  visibility_config {
+    cloudwatch_metrics_enabled = false
+    metric_name                = "WAFACL"
+    sampled_requests_enabled   = false
+  }
+}
+
+# Get the ARN of the Application Load Balancer created by the Ingress
+data "aws_lb" "app_lb" {
+  depends_on = [helm_release.aws_load_balancer_controller]
+  tags = {
+    "elbv2.k8s.aws/cluster" = "${var.project_name}-cluster"
+  }
+}
+
+resource "aws_wafv2_web_acl_association" "main" {
+  resource_arn = data.aws_lb.app_lb.arn
+  web_acl_arn  = aws_wafv2_web_acl.main.arn
 }
