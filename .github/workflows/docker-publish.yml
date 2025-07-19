@@ -9,12 +9,12 @@ on:
       rt_npm_remote_repo_id:
         required: true
         type: string
-        default: "megexc-npm-local"
+        default: "megexc-npm-remote"
         description: "Artifactory Repository Name"
       rt_npm_curation_remote_repo_id:
         required: true
         type: string
-        default: "megexc-npm-local"
+        default: "megexc-npm-remote"
         description: "NPM Curation Repository Name"
       rt_docker_repo:
         required: true
