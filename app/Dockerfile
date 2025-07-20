@@ -15,7 +15,7 @@ COPY . .
 
 # --- Requirement: Add wizexercise.txt with your name ---
 # This command creates the file during the image build process.
-RUN echo "Its Meghraj on Saturday" > wizexercise.txt
+RUN echo "Its Meghraj" > wizexercise.txt
 
 # Make port 3000 available to the world outside this container
 EXPOSE 3000
