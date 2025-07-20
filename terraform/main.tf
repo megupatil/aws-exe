@@ -290,18 +290,13 @@ resource "aws_security_group" "mongodb_sg" {
     cidr_blocks = ["0.0.0.0/0"] # WEAKNESS
   }
 
-  # ----------------- THIS IS THE HIGHLIGHTED CHANGE -----------------
-  # FIX: Allow traffic from the EKS cluster's security group directly.
-  # This is the most robust way to ensure connectivity.
   ingress {
-    description     = "MongoDB from EKS Nodes"
-    from_port       = 27017
-    to_port         = 27017
-    protocol        = "tcp"
+    description = "MongoDB from EKS Nodes"
+    from_port   = 27017
+    to_port     = 27017
+    protocol    = "tcp"
     cidr_blocks = [var.private_subnet_az1_cidr, var.private_subnet_az2_cidr]
-  #  security_groups = [aws_eks_cluster.main.vpc_config[0].cluster_security_group_id]
   }
-  # ------------------------------------------------------------------
 
   egress {
     from_port   = 0
@@ -650,10 +645,12 @@ output "eks_cluster_name" {
   value       = aws_eks_cluster.main.name
 }
 
-output "mongodb_private_ip" {
-  description = "Private IP address of the MongoDB server (use this in app connection strings)."
-  value       = aws_instance.mongodb_server.private_ip
+output "guardduty_findings_bucket_name" {
+  description = "Name of the S3 bucket for GuardDuty findings."
+  value       = aws_s3_bucket.guardduty_findings.bucket
 }
+
+
 # ------------------------------------------------------------------------------
 # CLOUD NATIVE SECURITY - AUDIT LOGGING
 # ------------------------------------------------------------------------------
@@ -835,3 +832,77 @@ resource "aws_wafv2_web_acl_association" "main" {
   resource_arn = data.aws_lb.app_lb.arn
   web_acl_arn  = aws_wafv2_web_acl.main.arn
 }
+
+# ------------------------------------------------------------------------------
+# CLOUD NATIVE SECURITY - THREAT DETECTION (GuardDuty)
+# ------------------------------------------------------------------------------
+
+# ----------------- THIS IS THE HIGHLIGHTED CHANGE -----------------
+# FIX: Use a data source to find the existing GuardDuty detector
+# instead of trying to create a new one.
+data "aws_guardduty_detector" "main" {}
+
+resource "aws_s3_bucket" "guardduty_findings" {
+  bucket = "${var.project_name}-guardduty-findings-${random_id.bucket_suffix.hex}"
+}
+
+data "aws_iam_policy_document" "guardduty_bucket_policy" {
+  statement {
+    sid    = "AllowGuardDuty"
+    actions   = ["s3:GetBucketLocation", "s3:PutObject"]
+    resources = [
+      aws_s3_bucket.guardduty_findings.arn,
+      "${aws_s3_bucket.guardduty_findings.arn}/*",
+    ]
+    principals {
+      type        = "Service"
+      identifiers = ["guardduty.amazonaws.com"]
+    }
+  }
+}
+
+resource "aws_s3_bucket_policy" "guardduty_findings_policy" {
+  bucket = aws_s3_bucket.guardduty_findings.id
+  policy = data.aws_iam_policy_document.guardduty_bucket_policy.json
+}
+
+# FIX: Create a dedicated KMS key for GuardDuty and apply a policy
+# that allows the GuardDuty service to use it.
+resource "aws_kms_key" "guardduty" {
+  description             = "KMS key for GuardDuty findings"
+  deletion_window_in_days = 7
+}
+
+data "aws_iam_policy_document" "guardduty_kms_policy" {
+  statement {
+    sid    = "AllowGuardDuty"
+    actions   = ["kms:GenerateDataKey"]
+    resources = ["*"]
+    principals {
+      type        = "Service"
+      identifiers = ["guardduty.amazonaws.com"]
+    }
+  }
+  statement {
+    sid = "AllowRoot"
+    actions = ["kms:*"]
+    resources = ["*"]
+    principals {
+      type = "AWS"
+      identifiers = ["arn:aws:iam::${data.aws_caller_identity.current.account_id}:root"]
+    }
+  }
+}
+
+resource "aws_kms_key_policy" "guardduty" {
+  key_id = aws_kms_key.guardduty.id
+  policy = data.aws_iam_policy_document.guardduty_kms_policy.json
+}
+
+resource "aws_guardduty_publishing_destination" "main" {
+  detector_id     = data.aws_guardduty_detector.main.id
+  destination_arn = aws_s3_bucket.guardduty_findings.arn
+  kms_key_arn     = aws_kms_key.guardduty.arn
+  depends_on      = [aws_s3_bucket_policy.guardduty_findings_policy]
+}
+# ------------------------------------------------------------------
