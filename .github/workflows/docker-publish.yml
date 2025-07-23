@@ -84,8 +84,8 @@ jobs:
         env:
           JF_PROJECT: ${{ vars.JF_PROJECT }}
         with:
-          oidc-provider-name: exc
-          oidc-audience: meg-exc
+          oidc-provider-name: github-expressjs
+          oidc-audience: meghraj
 
       - name: Configure NPM with JFrog
         run: jf npmc --repo-resolve=${{ github.event.inputs.rt_npm_remote_repo_id }} --repo-deploy=${{ github.event.inputs.rt_npm_remote_repo_id }}
