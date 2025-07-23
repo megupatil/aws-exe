@@ -9,17 +9,17 @@ on:
       rt_npm_remote_repo_id:
         required: true
         type: string
-        default: "megexc-npm-remote"
+        default: "expressjs-npm-remote"
         description: "Artifactory Repository Name"
       rt_npm_curation_remote_repo_id:
         required: true
         type: string
-        default: "megexc-npm-remote"
+        default: "expressjs-npm-remote"
         description: "NPM Curation Repository Name"
       rt_docker_repo:
         required: true
         type: string
-        default: "megexc-docker-local"
+        default: "expressjs-docker-local"
         description: "Artifactory Docker repository"
       docker_image_name:
         required: true
