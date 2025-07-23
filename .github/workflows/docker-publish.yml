@@ -61,7 +61,7 @@ jobs:
       DOCKER_REPO: ${{ github.event.inputs.rt_docker_repo }}
       IMAGE_NAME: ${{ github.event.inputs.docker_image_name }}
       JFROG_CLI_LOG_LEVEL: ${{ github.event.inputs.cli_log_level }}
-      JF_URL: https://megsec.jfrog.io
+      JF_URL: https://megjpd.jfrog.io
 
     steps:
       - name: Print Inputs
