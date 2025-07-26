@@ -2,7 +2,7 @@
 sudo apt-get update
 sudo apt-get install -y gnupg awscli
 
-# Import the public key for MongoDB 4.2 (an outdated version)
+# Import the public key for MongoDB 4.2 (# WEAKNESS - an outdated version of MongoDB)
 wget -qO - https://www.mongodb.org/static/pgp/server-4.2.asc | sudo apt-key add -
 
 # Create a list file for MongoDB
