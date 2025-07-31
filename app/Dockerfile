@@ -13,9 +13,9 @@ RUN npm install
 # Copy app source code
 COPY . .
 
-# --- Requirement: Add wizexercise.txt with your name ---
+# --- Requirement: Add exercise.txt with your name ---
 # This command creates the file during the image build process.
-RUN echo "Its Meghraj TO-DO LIST on Tuesday" > wizexercise.txt
+RUN echo "Its Meghraj TO-DO LIST on Tuesday" > exercise.txt
 
 # Make port 3000 available to the world outside this container
 EXPOSE 3000
