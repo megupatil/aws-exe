@@ -48,7 +48,7 @@ resource "aws_vpc" "main" {
 resource "aws_subnet" "public_az1" {
   vpc_id                  = aws_vpc.main.id
   cidr_block              = var.public_subnet_az1_cidr
-  map_public_ip_on_launch = true
+  map_public_ip_on_launch = false
   availability_zone       = "${var.aws_region}a"
   tags = {
     Name                                = "${var.project_name}-public-subnet-az1"
@@ -72,7 +72,7 @@ resource "aws_subnet" "private_az1" {
 resource "aws_subnet" "public_az2" {
   vpc_id                  = aws_vpc.main.id
   cidr_block              = var.public_subnet_az2_cidr
-  map_public_ip_on_launch = true
+  map_public_ip_on_launch = false
   availability_zone       = "${var.aws_region}b"
   tags = {
     Name                                = "${var.project_name}-public-subnet-az2"
@@ -364,10 +364,10 @@ resource "random_id" "bucket_suffix" {
 resource "aws_s3_bucket_public_access_block" "db_backups_pab" {
   bucket = aws_s3_bucket.db_backups.id
 
-  block_public_acls       = false
-  block_public_policy     = false
-  ignore_public_acls      = false
-  restrict_public_buckets = false
+  block_public_acls       = true
+  block_public_policy     = true
+  ignore_public_acls      = true
+  restrict_public_buckets = true
 }
 
 resource "aws_s3_bucket_ownership_controls" "db_backups_ownership" {
@@ -383,7 +383,7 @@ resource "aws_s3_bucket_acl" "db_backups_acl" {
     aws_s3_bucket_ownership_controls.db_backups_ownership
   ]
   bucket = aws_s3_bucket.db_backups.id
-  acl    = "public-read" # WEAKNESS
+  acl    = "private" # WEAKNESS
 }
 
 data "aws_iam_policy_document" "db_backups_bucket_policy" {
@@ -807,7 +807,7 @@ resource "aws_wafv2_web_acl" "main" {
     }
 
     visibility_config {
-      cloudwatch_metrics_enabled = false
+      cloudwatch_metrics_enabled = true
       metric_name                = "SQLiRule"
       sampled_requests_enabled   = false
     }
